@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOTORWATCH — Predictive Maintenance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navrail">
+  <div class="brand">
+    <div class="brand-mark">M</div>
+    <span class="brand-name">MOTORWATCH</span>
+  </div>
+  <button class="nav-btn active" data-page="live">
+    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    Live Monitoring
+  </button>
+  <button class="nav-btn" data-page="history">
+    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+    Historical Analytics
+  </button>
+  <button class="nav-btn" data-page="ml">
+    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 4.5 17.5v-1A2.5 2.5 0 0 1 2 14V9a2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 .47-4.46A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 19.5 17.5v-1A2.5 2.5 0 0 0 22 14V9a2.5 2.5 0 0 0-2.5-2.5 2.5 2.5 0 0 0-.47-4.46A2.5 2.5 0 0 0 14.5 2Z"/></svg>
+    Predictive Maintenance
+  </button>
+
+  <div class="nav-spacer"></div>
+
+  <!-- Account / Settings dropdown -->
+  <div class="account-wrap" id="account-wrap">
+    <button class="account-btn" id="account-btn" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      <span id="account-motor-id">M-014</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="account-dropdown hidden" id="account-dropdown">
+      <div class="dropdown-section">
+        <div class="dropdown-label">Motor Unit</div>
+        <input class="dropdown-input" id="set-motor-id" placeholder="M-014">
+      </div>
+      <div class="dropdown-section">
+        <div class="dropdown-label">Location</div>
+        <input class="dropdown-input" id="set-location" placeholder="Plant Floor A">
+      </div>
+      <div class="dropdown-section">
+        <div class="dropdown-label">Alert Email</div>
+        <input class="dropdown-input" id="set-alert-email" type="email" placeholder="ops@example.com">
+      </div>
+      <div class="dropdown-section">
+        <div class="dropdown-label">Poll Interval (s)</div>
+        <input class="dropdown-input" id="set-poll" type="number" min="1" max="60" value="2">
+      </div>
+      <button class="dropdown-save" id="settings-save-btn">Save Settings</button>
+      <div class="dropdown-saved hidden" id="dropdown-saved">✓ Saved</div>
+      <button class="dropdown-save" id="db-reset-btn" style="background:var(--critical);margin-top:6px;">Reset Database</button>
+    </div>
+  </div>
+</nav>
+
+<main id="page-root">
+
+  <!-- ===================== LIVE MONITORING ===================== -->
+  <section class="page" id="page-live">
+    <header class="page-header">
+      <div>
+        <h1>Live Monitoring</h1>
+        <p class="subtitle" id="live-subtitle">Motor unit M-014 · local SQL · polled every 2s</p>
+      </div>
+      <div class="header-right">
+        <div class="status-pill" id="motor-status-pill">
+          <span class="dot"></span> MOTOR ON
+        </div>
+        <div class="live-clock" id="live-clock">
+          <span class="dot amber"></span> LIVE · --:--:--
+        </div>
+      </div>
+    </header>
+
+    <div class="param-grid" id="param-grid"><!-- param cards injected by app.js --></div>
+
+    <div class="panel focus-panel">
+      <div class="panel-head">
+        <div class="panel-title" id="focus-title">Vibration over time</div>
+        <span class="panel-meta">last 2 min</span>
+      </div>
+      <svg id="focus-chart" class="chart-svg" viewBox="0 0 880 220" preserveAspectRatio="none"></svg>
+    </div>
+  </section>
+
+  <!-- ===================== HISTORICAL ANALYTICS ===================== -->
+  <section class="page hidden" id="page-history">
+    <header class="page-header">
+      <div>
+        <h1>Historical Analytics</h1>
+        <p class="subtitle">Queried from local SQLite archive</p>
+      </div>
+      <div class="header-right">
+        <div class="range-group" id="range-group">
+          <button class="chip" data-range="1d">Last 24h</button>
+          <button class="chip" data-range="7d">Last 7 days</button>
+          <button class="chip" data-range="30d">Last 30 days</button>
+        </div>
+        <button class="btn-outline" id="export-csv-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export CSV
+        </button>
+      </div>
+    </header>
+
+    <div class="compare-row">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" class="filter-icon"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+      <span class="compare-label">Compare (up to 3):</span>
+      <div class="compare-chips" id="compare-chips"><!-- injected --></div>
+    </div>
+
+    <div class="panel">
+      <svg id="history-chart" class="chart-svg" viewBox="0 0 880 260" preserveAspectRatio="none"></svg>
+    </div>
+
+    <div class="stat-grid" id="stat-grid"><!-- injected --></div>
+  </section>
+
+  <!-- ===================== PREDICTIVE MAINTENANCE ===================== -->
+  <section class="page hidden" id="page-ml">
+    <header class="page-header">
+      <div>
+        <h1>Predictive Maintenance</h1>
+        <p class="subtitle">Unsupervised anomaly detection · Isolation Forest · local inference</p>
+      </div>
+    </header>
+
+    <!-- Training Configuration -->
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Training Configuration
+        </div>
+      </div>
+
+      <div class="training-status" id="training-status-badge">MACHINE UNDER TRAINING</div>
+
+      <div class="progress-track">
+        <div class="progress-fill" id="training-progress-fill"></div>
+      </div>
+
+      <div class="stat-grid four-col">
+        <div class="stat"><div class="stat-label">Progress</div><div class="stat-value" id="stat-progress">0%</div></div>
+        <div class="stat"><div class="stat-label">Records collected</div><div class="stat-value" id="stat-records">0</div></div>
+        <div class="stat"><div class="stat-label">Completes</div><div class="stat-value" id="stat-completes">—</div></div>
+        <div class="stat"><div class="stat-label">Window</div><div class="stat-value" id="stat-window">15 days</div></div>
+      </div>
+    </div>
+
+    <!-- Real-time health + anomaly chart -->
+    <div class="panel inference-panel" id="inference-panel">
+      <div class="inference-lock hidden" id="inference-lock">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <span>Inference unlocks once training period completes</span>
+      </div>
+      <div class="panel-head">
+        <div class="panel-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 4.5 17.5v-1A2.5 2.5 0 0 1 2 14V9a2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 .47-4.46A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 19.5 17.5v-1A2.5 2.5 0 0 0 22 14V9a2.5 2.5 0 0 0-2.5-2.5 2.5 2.5 0 0 0-.47-4.46A2.5 2.5 0 0 0 14.5 2Z"/></svg>
+          Real-Time Health Assessment
+        </div>
+        <div class="health-pill" id="health-pill">Healthy</div>
+      </div>
+      <div class="inference-grid">
+        <div>
+          <div class="panel-meta" style="margin-bottom:8px;">Anomaly score (Isolation Forest, last 80 readings)</div>
+          <svg id="anomaly-chart" class="chart-svg" viewBox="0 0 600 180" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="score-list">
+          <div class="score-row"><span>Score</span><span id="score-value">0.000</span></div>
+          <div class="score-row dim"><span>Warn threshold</span><span>0.350</span></div>
+          <div class="score-row dim"><span>Anomaly threshold</span><span>0.600</span></div>
+          <div class="score-row dim"><span>Critical threshold</span><span>0.800</span></div>
+          <div class="score-row dim"><span>Model</span><span>IsolationForest</span></div>
+          <div class="score-row dim"><span>Backend</span><span>SQLite · local</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fault Diagnosis -->
+    <div class="panel fault-panel" id="fault-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Fault Diagnosis
+        </div>
+        <div class="top-fault-pill" id="top-fault-pill">—</div>
+      </div>
+      <div class="fault-bars" id="fault-bars"><!-- injected by app.js --></div>
+      <div class="fault-note">
+        Rule-based z-score signatures against engineered features. Confidence scores are relative —
+        a low top score means the motor is operating within normal envelopes.
+      </div>
+    </div>
+
+    <!-- Feature Notes -->
+    <div class="panel notes-panel">
+      <div class="panel-title" style="margin-bottom:10px;">Model &amp; Feature Notes</div>
+      <p class="notes-text">
+        Raw features: <strong>rpm, current, torque, dc_voltage, temperature, vibration</strong>.
+        Derived at engineering time: <strong>motor_on</strong> (rpm&nbsp;&gt;&nbsp;5),
+        <strong>mechanical_power_proxy</strong> (|torque|×rpm),
+        <strong>torque_current_ratio</strong>, plus rolling-window statistics
+        (mean, std, rate-of-change over 10 readings).
+        DC bus voltage reflects VFD/inverter-fed drive — power is derived as
+        dc_voltage × current and labeled accordingly.
+        Torque sign indicates regenerative (braking) vs. drive operation.
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
