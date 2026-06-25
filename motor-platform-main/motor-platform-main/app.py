@@ -159,6 +159,16 @@ _settings = {
     "location": "Plant Floor A",
     "poll_interval_s": 2,
     "alert_email": "",
+    "thresholds": {
+        "rpm":         {"min": 0, "max": 270},
+        "current":     {"min": 0, "max": 80},
+        "torque":      {"min": -140, "max": 140},
+        "dc_voltage":  {"min": 500, "max": 600},
+        "temperature": {"min": 20, "max": 80},
+        "vibration":   {"min": 0, "max": 6},
+        "power":       {"min": 0, "max": 50},
+        "slip":        {"min": 0, "max": 20}
+    }
 }
 
 @app.route("/api/settings", methods=["GET"])
@@ -168,7 +178,19 @@ def api_settings_get():
 @app.route("/api/settings", methods=["POST"])
 def api_settings_post():
     body = request.get_json(force=True)
-    _settings.update({k: v for k, v in body.items() if k in _settings})
+    
+    # Handle top-level primitive values
+    _settings.update({k: v for k, v in body.items() if k in _settings and k != "thresholds"})
+    
+    # Handle nested thresholds safely
+    if "thresholds" in body and isinstance(body["thresholds"], dict):
+        for param, limits in body["thresholds"].items():
+            if param in _settings["thresholds"] and isinstance(limits, dict):
+                if "min" in limits:
+                    _settings["thresholds"][param]["min"] = float(limits["min"])
+                if "max" in limits:
+                    _settings["thresholds"][param]["max"] = float(limits["max"])
+                    
     return jsonify(_settings)
 
 

@@ -77,6 +77,7 @@ document.querySelectorAll(".nav-btn").forEach(btn => {
     document.getElementById(`page-${btn.dataset.page}`).classList.remove("hidden");
     if (btn.dataset.page === "history") loadHistory();
     if (btn.dataset.page === "ml")      loadMLStatus();
+    if (btn.dataset.page === "thresholds") renderThresholdsUI();
   });
 });
 
@@ -134,6 +135,56 @@ document.getElementById("db-reset-btn").addEventListener("click", async () => {
   if (!confirm("Are you sure you want to completely wipe the database and reset the ML model state?")) return;
   await fetch(`${API_BASE}/api/db/reset`, { method: "POST" });
   window.location.reload();
+});
+
+/* ── Thresholds ─────────────────────────────────────────────────── */
+function renderThresholdsUI() {
+  const grid = document.getElementById("thresholds-grid");
+  grid.innerHTML = "";
+  const thresholds = settings.thresholds || {};
+
+  Object.entries(PARAM_META).forEach(([key, meta]) => {
+    const t = thresholds[key] || { min: meta.range[0], max: meta.range[1] };
+    const card = document.createElement("div");
+    card.className = "threshold-card";
+    card.innerHTML = `
+      <div class="threshold-card-head">
+        ${svgIcon(key, colorFromVar(meta.color))}
+        ${meta.label} (${meta.unit})
+      </div>
+      <div class="threshold-inputs">
+        <label>Min <input type="number" step="any" id="t-min-${key}" value="${t.min}"></label>
+        <label>Max <input type="number" step="any" id="t-max-${key}" value="${t.max}"></label>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+document.getElementById("save-thresholds-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("save-thresholds-btn");
+  btn.textContent = "Saving...";
+  
+  const thresholds = {};
+  Object.keys(PARAM_META).forEach(key => {
+    const minVal = parseFloat(document.getElementById(`t-min-${key}`)?.value);
+    const maxVal = parseFloat(document.getElementById(`t-max-${key}`)?.value);
+    if (!isNaN(minVal) && !isNaN(maxVal)) {
+      thresholds[key] = { min: minVal, max: maxVal };
+    }
+  });
+
+  await fetch(`${API_BASE}/api/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thresholds }),
+  });
+  
+  settings.thresholds = thresholds;
+  
+  setTimeout(() => {
+    btn.textContent = "Save Thresholds";
+  }, 1000);
 });
 
 /* ── SVG chart helpers ──────────────────────────────────────────── */
@@ -253,6 +304,60 @@ function renderTimeseriesChart(svgEl, series, colors, opts = {}) {
   svgEl.innerHTML = svg;
 }
 
+function renderScatterChart(svgEl, sX, sY, colorX, colorY, labelX, labelY) {
+  const w = 880, h = 260;
+  const padX = 48, padY = 16, padBottom = 28;
+  const chartW = w - padX * 2;
+  const chartH = h - padY - padBottom;
+
+  if (!sX.values.length || !sY.values.length) { svgEl.innerHTML = ""; return; }
+
+  const minX = Math.min(...sX.values);
+  const maxX = Math.max(...sX.values);
+  const minY = Math.min(...sY.values);
+  const maxY = Math.max(...sY.values);
+
+  const px = v => padX + ((v - minX) / (maxX - minX || 1)) * chartW;
+  const py = v => padY + (1 - (v - minY) / (maxY - minY || 1)) * chartH;
+
+  let svg = `<g class="chart-gridlines">`;
+
+  // Y ticks
+  const yTicks = niceTicks(minY, maxY, 5);
+  yTicks.forEach(tick => {
+    const y = py(tick);
+    if (y < padY || y > padY + chartH) return;
+    svg += `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${w - padX}" y2="${y.toFixed(1)}" stroke="#2C343C" stroke-width="1"/>`;
+    svg += `<text x="${padX - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="#5C6671" font-size="9" font-family="IBM Plex Mono,monospace">${tick % 1 === 0 ? tick : tick.toFixed(1)}</text>`;
+  });
+
+  // X ticks
+  const xTicks = niceTicks(minX, maxX, 7);
+  xTicks.forEach(tick => {
+    const x = px(tick);
+    if (x < padX || x > padX + chartW) return;
+    svg += `<line x1="${x.toFixed(1)}" y1="${padY}" x2="${x.toFixed(1)}" y2="${padY + chartH}" stroke="#2C343C" stroke-width="1"/>`;
+    svg += `<text x="${x.toFixed(1)}" y="${padY + chartH + 14}" text-anchor="middle" fill="#5C6671" font-size="9" font-family="IBM Plex Mono,monospace">${tick % 1 === 0 ? tick : tick.toFixed(1)}</text>`;
+  });
+  
+  // Axis labels
+  svg += `<text x="${w/2}" y="${h - 2}" text-anchor="middle" fill="#8A95A1" font-size="10" font-family="Inter,sans-serif">${labelX}</text>`;
+  svg += `<text x="${12}" y="${h/2}" text-anchor="middle" fill="#8A95A1" font-size="10" font-family="Inter,sans-serif" transform="rotate(-90 12 ${h/2})">${labelY}</text>`;
+
+  svg += `</g>`;
+
+  // Draw points
+  let pointsStr = "";
+  const len = Math.min(sX.values.length, sY.values.length);
+  for (let i = 0; i < len; i++) {
+    const cx = px(sX.values[i]);
+    const cy = py(sY.values[i]);
+    pointsStr += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="${colorY}" opacity="0.6"/>`;
+  }
+
+  svgEl.innerHTML = svg + pointsStr;
+}
+
 function renderAnomalyChart(svgEl, points) {
   const w = 600, h = 180, padX = 10, padY = 12, padBottom = 8;
   const chartH = h - padY - padBottom;
@@ -329,6 +434,17 @@ async function loadLive() {
 
       const spark = document.getElementById(`spark-${key}`);
       if (spark) renderSparkline(spark, s.points.map(p => p.value), colorFromVar(PARAM_META[key].color));
+      
+      // Threshold check
+      const cardEl = document.querySelector(`.param-card[data-key="${key}"]`);
+      if (cardEl && settings.thresholds && settings.thresholds[key] && s.latest != null) {
+        const t = settings.thresholds[key];
+        if (s.latest < t.min || s.latest > t.max) {
+          cardEl.classList.add("alert");
+        } else {
+          cardEl.classList.remove("alert");
+        }
+      }
     });
 
     // update focus chart
@@ -385,7 +501,10 @@ function buildCompareChips(series) {
         compareKeys = compareKeys.filter(k => k !== key);
         btn.classList.remove("active");
       } else {
-        if (compareKeys.length >= 3) return;
+        if (compareKeys.length >= 2) {
+          // If we already have 2, replace the last one selected or just return
+          return;
+        }
         compareKeys.push(key);
         btn.classList.add("active");
       }
@@ -415,12 +534,33 @@ function buildStatGrid(stats) {
 function renderHistoryChart(data) {
   if (!data) return;
   const active = compareKeys.filter(k => data.series[k]);
-  const series = active.map(k => ({
-    values: data.series[k].points.map(p => p.value),
-    times:  data.series[k].points.map(p => p.time),
-  }));
-  const colors = active.map(k => PARAM_META[k].color);
-  renderTimeseriesChart(document.getElementById("history-chart"), series, colors, { height: 260 });
+  
+  if (active.length >= 1) {
+    const k1 = active[0];
+    const s1 = { values: data.series[k1].points.map(p => p.value), times: data.series[k1].points.map(p => p.time) };
+    document.getElementById("history-header-1").style.display = "flex";
+    document.getElementById("history-title-1").textContent = PARAM_META[k1].label + " over time";
+    renderTimeseriesChart(document.getElementById("history-chart-1"), [s1], [PARAM_META[k1].color], { height: 200 });
+  }
+
+  if (active.length === 2) {
+    const k1 = active[0];
+    const k2 = active[1];
+    const s1 = { values: data.series[k1].points.map(p => p.value), times: data.series[k1].points.map(p => p.time) };
+    const s2 = { values: data.series[k2].points.map(p => p.value), times: data.series[k2].points.map(p => p.time) };
+    
+    document.getElementById("history-panel-2").classList.remove("hidden");
+    document.getElementById("history-title-2").textContent = PARAM_META[k2].label + " over time";
+    renderTimeseriesChart(document.getElementById("history-chart-2"), [s2], [PARAM_META[k2].color], { height: 200 });
+    
+    document.getElementById("history-panel-corr").classList.remove("hidden");
+    const col1 = colorFromVar(PARAM_META[k1].color);
+    const col2 = colorFromVar(PARAM_META[k2].color);
+    renderScatterChart(document.getElementById("history-chart-corr"), s1, s2, col1, col2, PARAM_META[k1].label, PARAM_META[k2].label);
+  } else {
+    document.getElementById("history-panel-2").classList.add("hidden");
+    document.getElementById("history-panel-corr").classList.add("hidden");
+  }
 }
 
 async function loadHistory() {
