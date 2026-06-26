@@ -144,6 +144,7 @@ function renderThresholdsUI() {
   const thresholds = settings.thresholds || {};
 
   Object.entries(PARAM_META).forEach(([key, meta]) => {
+    if (key === "set_rpm" || key === "slip") return;
     const t = thresholds[key] || { min: meta.range[0], max: meta.range[1] };
     const card = document.createElement("div");
     card.className = "threshold-card";
@@ -167,6 +168,7 @@ document.getElementById("save-thresholds-btn").addEventListener("click", async (
   
   const thresholds = {};
   Object.keys(PARAM_META).forEach(key => {
+    if (key === "set_rpm" || key === "slip") return;
     const minVal = parseFloat(document.getElementById(`t-min-${key}`)?.value);
     const maxVal = parseFloat(document.getElementById(`t-max-${key}`)?.value);
     if (!isNaN(minVal) && !isNaN(maxVal)) {
@@ -395,28 +397,24 @@ function buildParamCards(series) {
 
   grid.innerHTML = "";
   Object.entries(PARAM_META).forEach(([key, meta]) => {
-    if (!series[key]) return;
+    if (!series[key] || key === "set_rpm") return;
     const card = document.createElement("div");
     card.className = "param-card";
     card.dataset.key = key;
     const col = colorFromVar(meta.color);
     const derivedBadge = meta.derived ? `<span class="derived-badge">DERIVED</span>` : "";
     card.innerHTML = `
-      <div class="card-head">
-        ${svgIcon(key, col)}
-        <span class="card-label">${meta.label}${derivedBadge}</span>
+      <div class="panel-head" style="margin-bottom:0;">
+        <div class="panel-title">
+          ${svgIcon(key, col)}
+          ${meta.label}${derivedBadge}
+        </div>
+        <div style="text-align:right">
+          <span class="param-card-value" style="margin:0;"><span class="num" id="val-${key}">—</span> <span class="unit">${meta.unit}</span></span>
+        </div>
       </div>
-      <div class="card-value" id="val-${key}">—</div>
-      <div class="card-unit">${meta.unit}</div>
-      <svg class="sparkline" id="spark-${key}"></svg>
+      <svg class="chart-svg" id="chart-${key}" viewBox="0 0 880 220" preserveAspectRatio="none" style="height:160px; margin-top:10px;"></svg>
     `;
-    card.addEventListener("click", () => {
-      document.querySelectorAll(".param-card").forEach(c => c.classList.remove("active"));
-      card.classList.add("active");
-      focusParam = key;
-      document.getElementById("focus-title").textContent = `${meta.label} over time`;
-    });
-    if (key === focusParam) card.classList.add("active");
     grid.appendChild(card);
   });
 }
@@ -429,11 +427,23 @@ async function loadLive() {
     buildParamCards(data.series || {});
 
     Object.entries(data.series || {}).forEach(([key, s]) => {
+      if (key === "set_rpm") return;
       const valEl = document.getElementById(`val-${key}`);
       if (valEl) valEl.textContent = s.latest != null ? s.latest : "—";
 
-      const spark = document.getElementById(`spark-${key}`);
-      if (spark) renderSparkline(spark, s.points.map(p => p.value), colorFromVar(PARAM_META[key].color));
+      const chartEl = document.getElementById(`chart-${key}`);
+      if (chartEl) {
+        let toRender = [{ values: s.points.map(p => p.value), times: s.points.map(p => p.time) }];
+        let colors = [colorFromVar(PARAM_META[key].color)];
+        
+        if (key === "rpm" && data.series["set_rpm"]) {
+          const sr = data.series["set_rpm"];
+          toRender.push({ values: sr.points.map(p => p.value), times: sr.points.map(p => p.time) });
+          colors.push(colorFromVar(PARAM_META["set_rpm"].color));
+        }
+        
+        renderTimeseriesChart(chartEl, toRender, colors, { height: 160 });
+      }
       
       // Threshold check
       const cardEl = document.querySelector(`.param-card[data-key="${key}"]`);
@@ -446,17 +456,6 @@ async function loadLive() {
         }
       }
     });
-
-    // update focus chart
-    const fs = data.series[focusParam];
-    if (fs) {
-      const col = colorFromVar(PARAM_META[focusParam].color);
-      renderTimeseriesChart(
-        document.getElementById("focus-chart"),
-        [{ values: fs.points.map(p => p.value), times: fs.points.map(p => p.time) }],
-        [col],
-      );
-    }
 
     // status pill
     const pill = document.getElementById("motor-status-pill");
@@ -486,32 +485,102 @@ function restartPoll() {
 
 /* ── Historical Analytics ───────────────────────────────────────── */
 
-function buildCompareChips(series) {
-  const container = document.getElementById("compare-chips");
-  container.innerHTML = "";
-  Object.entries(PARAM_META).forEach(([key, meta]) => {
-    if (!series[key]) return;
-    const btn = document.createElement("button");
-    btn.className = "chip" + (compareKeys.includes(key) ? " active" : "");
-    btn.textContent = meta.label + (meta.derived ? " ◇" : "");
-    btn.dataset.key = key;
-    btn.addEventListener("click", () => {
-      if (compareKeys.includes(key)) {
-        if (compareKeys.length === 1) return;
-        compareKeys = compareKeys.filter(k => k !== key);
-        btn.classList.remove("active");
-      } else {
-        if (compareKeys.length >= 2) {
-          // If we already have 2, replace the last one selected or just return
-          return;
-        }
-        compareKeys.push(key);
+let singleParamKey   = "rpm";
+let corrXKey         = "rpm";
+let corrYKey         = "temperature";
+
+function buildHistorySelectors(series) {
+  const paramKeys = Object.keys(PARAM_META).filter(k => k !== "set_rpm" && series[k]);
+
+  function buildRow(containerId, activeKey, onSelect) {
+    const container = document.getElementById(containerId);
+    container.innerHTML = "";
+    paramKeys.forEach(key => {
+      const meta = PARAM_META[key];
+      const col  = colorFromVar(meta.color);
+      const btn  = document.createElement("button");
+      btn.className = "hist-chip" + (key === activeKey ? " active" : "");
+      btn.style.setProperty("--chip-color", col);
+      btn.textContent = meta.label + (meta.derived ? " ◇" : "");
+      btn.dataset.key = key;
+      btn.addEventListener("click", () => {
+        container.querySelectorAll(".hist-chip").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
-      }
-      renderHistoryChart(window._historyData);
+        onSelect(key);
+      });
+      container.appendChild(btn);
     });
-    container.appendChild(btn);
+  }
+
+  // Section 1 — single param
+  buildRow("single-param-chips", singleParamKey, key => {
+    singleParamKey = key;
+    renderSingleParamChart(window._historyData);
   });
+
+  // Section 2 — correlation X
+  buildRow("corr-x-chips", corrXKey, key => {
+    corrXKey = key;
+    renderCorrChart(window._historyData);
+  });
+
+  // Section 2 — correlation Y
+  buildRow("corr-y-chips", corrYKey, key => {
+    corrYKey = key;
+    renderCorrChart(window._historyData);
+  });
+}
+
+function renderSingleParamChart(data) {
+  if (!data || !data.series) return;
+  const key  = singleParamKey;
+  const s    = data.series[key];
+  if (!s) return;
+
+  const meta = PARAM_META[key];
+  const col  = colorFromVar(meta.color);
+
+  let toRender = [{ values: s.points.map(p => p.value), times: s.points.map(p => p.time) }];
+  let colors   = [col];
+  let title    = meta.label + " over time";
+
+  // Overlay set_rpm on speed chart
+  if (key === "rpm" && data.series["set_rpm"]) {
+    const sr = data.series["set_rpm"];
+    toRender.push({ values: sr.points.map(p => p.value), times: sr.points.map(p => p.time) });
+    colors.push(colorFromVar(PARAM_META["set_rpm"].color));
+    title = "Speed & Set Speed over time";
+  }
+
+  document.getElementById("history-title-single").textContent = title;
+  document.getElementById("history-meta-single").textContent  =
+    s.points.length ? `${s.points.length} data points` : "";
+  renderTimeseriesChart(
+    document.getElementById("history-chart-single"),
+    toRender, colors, { height: 240 }
+  );
+}
+
+function renderCorrChart(data) {
+  if (!data || !data.series) return;
+  const sx = data.series[corrXKey];
+  const sy = data.series[corrYKey];
+  if (!sx || !sy) return;
+
+  const metaX = PARAM_META[corrXKey];
+  const metaY = PARAM_META[corrYKey];
+  const colX  = colorFromVar(metaX.color);
+  const colY  = colorFromVar(metaY.color);
+
+  document.getElementById("history-title-corr").textContent =
+    `${metaX.label} (${metaX.unit}) vs ${metaY.label} (${metaY.unit})`;
+
+  renderScatterChart(
+    document.getElementById("history-chart-corr"),
+    { values: sx.points.map(p => p.value) },
+    { values: sy.points.map(p => p.value) },
+    colX, colY, `${metaX.label} (${metaX.unit})`, `${metaY.label} (${metaY.unit})`
+  );
 }
 
 function buildStatGrid(stats) {
@@ -519,6 +588,7 @@ function buildStatGrid(stats) {
   grid.innerHTML = "";
   Object.entries(stats).forEach(([key, s]) => {
     const meta = PARAM_META[key] || { label: key, unit: "", derived: false };
+    if (key === "set_rpm") return;
     const derivedBadge = meta.derived ? `<span class="derived-badge">DERIVED</span>` : "";
     const card = document.createElement("div");
     card.className = "stat";
@@ -531,44 +601,13 @@ function buildStatGrid(stats) {
   });
 }
 
-function renderHistoryChart(data) {
-  if (!data) return;
-  const active = compareKeys.filter(k => data.series[k]);
-  
-  if (active.length >= 1) {
-    const k1 = active[0];
-    const s1 = { values: data.series[k1].points.map(p => p.value), times: data.series[k1].points.map(p => p.time) };
-    document.getElementById("history-header-1").style.display = "flex";
-    document.getElementById("history-title-1").textContent = PARAM_META[k1].label + " over time";
-    renderTimeseriesChart(document.getElementById("history-chart-1"), [s1], [PARAM_META[k1].color], { height: 200 });
-  }
-
-  if (active.length === 2) {
-    const k1 = active[0];
-    const k2 = active[1];
-    const s1 = { values: data.series[k1].points.map(p => p.value), times: data.series[k1].points.map(p => p.time) };
-    const s2 = { values: data.series[k2].points.map(p => p.value), times: data.series[k2].points.map(p => p.time) };
-    
-    document.getElementById("history-panel-2").classList.remove("hidden");
-    document.getElementById("history-title-2").textContent = PARAM_META[k2].label + " over time";
-    renderTimeseriesChart(document.getElementById("history-chart-2"), [s2], [PARAM_META[k2].color], { height: 200 });
-    
-    document.getElementById("history-panel-corr").classList.remove("hidden");
-    const col1 = colorFromVar(PARAM_META[k1].color);
-    const col2 = colorFromVar(PARAM_META[k2].color);
-    renderScatterChart(document.getElementById("history-chart-corr"), s1, s2, col1, col2, PARAM_META[k1].label, PARAM_META[k2].label);
-  } else {
-    document.getElementById("history-panel-2").classList.add("hidden");
-    document.getElementById("history-panel-corr").classList.add("hidden");
-  }
-}
-
 async function loadHistory() {
-  const r = await fetch(`${API_BASE}/api/history?range=${currentRange}`);
+  const r    = await fetch(`${API_BASE}/api/history?range=${currentRange}`);
   const data = await r.json();
   window._historyData = data;
-  buildCompareChips(data.series || {});
-  renderHistoryChart(data);
+  buildHistorySelectors(data.series || {});
+  renderSingleParamChart(data);
+  renderCorrChart(data);
   buildStatGrid(data.stats || {});
 }
 

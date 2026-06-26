@@ -155,17 +155,15 @@ body {
 /* ---------------- Param grid / cards ---------------- */
 .param-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
 }
 .param-card {
   background: var(--panel);
   border: 1px solid var(--hairline);
   border-radius: 10px;
-  padding: 14px 16px 10px;
-  cursor: pointer;
-  transition: outline 0.1s, background 0.3s, border-color 0.3s;
-  outline: none;
+  padding: 16px;
+  transition: border-color 0.3s;
 }
 .param-card.focused { outline: 1.5px solid var(--card-color, var(--amber)); }
 
@@ -569,4 +567,63 @@ body {
   width: 100%;
   outline: none;
 }
+/* History page redesign */
+.hist-section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 10px;
+}
+.hist-selector-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.hist-chip {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  background: var(--panel-raised);
+  color: var(--text-dim);
+  border: 1px solid var(--hairline);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.hist-chip:hover { color: var(--text-primary); background: var(--panel); }
+.hist-chip.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--chip-color, var(--amber)) 15%, transparent);
+  border-color: var(--chip-color, var(--amber));
+}
+.hist-corr-selectors {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.hist-corr-axis {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.hist-axis-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  min-width: 46px;
+}
+
 .threshold-inputs input:focus { border-color: var(--amber); }

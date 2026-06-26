@@ -100,7 +100,7 @@ def add_derived(df: pd.DataFrame) -> pd.DataFrame:
     """Add motor_on and power columns derived from raw sensor columns."""
     df = df.copy()
     df["motor_on"] = (df["rpm"] > 5).astype(int)
-    df["power"] = (df["dc_voltage"] * df["current"]).round(3)
+    df["power"] = ((df["dc_voltage"] * df["current"]) / 1000.0).round(3)
     df["slip"] = (df["set_rpm"] - df["rpm"]).abs().round(4)
     return df
 

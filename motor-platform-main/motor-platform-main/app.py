@@ -17,6 +17,9 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "data"))
 import db
 import ml_model
 import data_visualization as viz
+import json
+
+SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "settings.json")
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
 app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
@@ -111,7 +114,14 @@ def api_ml_live_score():
     latest_df = db.add_derived(latest_df)
     latest = latest_df.iloc[-1]
     reading = {col: float(latest[col]) for col in ml_model.RAW_COLUMNS if col in latest}
-    return jsonify(ml_model.predict(reading))
+    result = ml_model.predict(reading)
+    # Add computed thermal metrics from engineered data (if present)
+    result.update({
+        "thermal_overload": float(latest.get("thermal_overload", 0.0)),
+        "thermal_stress": float(latest.get("thermal_stress", 0.0)),
+        "motor_overload": float(latest.get("motor_overload", 0.0)),
+    })
+    return jsonify(result)
 
 
 @app.route("/api/ml/anomaly-history")
@@ -128,6 +138,26 @@ def api_ml_anomaly_history():
         return jsonify(viz.anomaly_payload(scored))
     except Exception as e:
         return jsonify({"error": str(e), "points": []}), 500
+
+@app.route("/api/ml/predict-history")
+def api_ml_predict_history():
+    """Return predictive maintenance inference for recent historical data.
+    Includes thermal_overload, thermal_stress, motor_overload calculated by the model.
+    """
+    if not ml_model.model_is_trained():
+        return jsonify({"error": "Model not trained"}), 400
+    n = request.args.get("n", default=80, type=int)
+    recent = db.fetch_latest(n=n)
+    if recent.empty:
+        return jsonify({"rows": []})
+    recent = db.add_derived(recent)
+    try:
+        scored = ml_model.predict_batch(recent)
+        # Convert to list of dicts for JSON response
+        rows = scored.to_dict(orient="records")
+        return jsonify({"rows": rows})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Fault diagnosis (dedicated endpoint) ──────────────────────────────────────
@@ -171,6 +201,31 @@ _settings = {
     }
 }
 
+if os.path.exists(SETTINGS_PATH):
+    try:
+        with open(SETTINGS_PATH, "r") as f:
+            _saved = json.load(f)
+            # Basic merge to handle nested thresholds
+            for k, v in _saved.items():
+                if k == "thresholds" and isinstance(v, dict):
+                    for tk, tv in v.items():
+                        if tk in _settings["thresholds"]:
+                            _settings["thresholds"][tk].update(tv)
+                else:
+                    _settings[k] = v
+    except Exception as e:
+        print(f"Error loading settings: {e}")
+
+def save_settings():
+    try:
+        with open(SETTINGS_PATH, "w") as f:
+            json.dump(_settings, f, indent=2)
+    except Exception as e:
+        print(f"Error saving settings: {e}")
+
+# Sync the ML model's thermal stress threshold (P605) with the UI setting on startup
+ml_model.set_p605_threshold(float(_settings["thresholds"]["temperature"]["max"]))
+
 @app.route("/api/settings", methods=["GET"])
 def api_settings_get():
     return jsonify(_settings)
@@ -191,6 +246,10 @@ def api_settings_post():
                 if "max" in limits:
                     _settings["thresholds"][param]["max"] = float(limits["max"])
                     
+    # Sync the ML model's thermal stress threshold (P605) whenever settings are updated
+    ml_model.set_p605_threshold(float(_settings["thresholds"]["temperature"]["max"]))
+                    
+    save_settings()
     return jsonify(_settings)
 
 

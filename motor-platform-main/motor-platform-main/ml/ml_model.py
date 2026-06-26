@@ -29,6 +29,8 @@ FEATURE_COLUMNS = [
     "set_rpm", "rpm", "current", "torque", "dc_voltage", "temperature", "vibration",
     # derived
     "motor_on", "mechanical_power_proxy", "torque_current_ratio", "slip",
+    # new calculations (placeholders)
+    "thermal_overload", "thermal_stress", "motor_overload",
     # rolling stats (window=10)
     "rpm_mean10", "rpm_std10", "current_mean10", "current_std10",
     "vibration_mean10", "vibration_std10", "temperature_rate10",
@@ -43,6 +45,11 @@ FEATURE_STATS_PATH = os.path.join(MODEL_DIR, "feature_stats.json")
 THRESHOLD_WARNING  = 0.35
 THRESHOLD_ANOMALY  = 0.60
 THRESHOLD_CRITICAL = 0.80
+_P605_THRESHOLD = 80.0  # °C threshold for thermal stress (dynamically set by app.py)
+
+def set_p605_threshold(val: float):
+    global _P605_THRESHOLD
+    _P605_THRESHOLD = val
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 
@@ -60,15 +67,21 @@ class TrainingState:
         return asdict(self)
 
 
+CONFIGURED_DURATION_HOURS = 1  # <-- change training window here
+
 def load_training_state() -> TrainingState:
     if os.path.exists(TRAINING_STATE_PATH):
         with open(TRAINING_STATE_PATH) as f:
             data = json.load(f)
+            # Remove legacy key if present
             if "duration_days" in data:
                 del data["duration_days"]
-                data["duration_hours"] = 3
-        return TrainingState(**data)
-    state = TrainingState(duration_hours=3, started_at=datetime.now().isoformat())
+            # Always enforce the configured duration from code
+            data["duration_hours"] = CONFIGURED_DURATION_HOURS
+        state = TrainingState(**data)
+        save_training_state(state)  # write back with corrected value
+        return state
+    state = TrainingState(duration_hours=CONFIGURED_DURATION_HOURS, started_at=datetime.now().isoformat())
     save_training_state(state)
     return state
 
@@ -118,6 +131,10 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         df["torque"] / df["current"].replace(0, np.nan)
     ).fillna(0).round(4)
     df["slip"] = (df["set_rpm"] - df["rpm"]).abs().round(4)
+    # Placeholder thermal calculations (only when rpm > 1)
+    df["thermal_overload"] = np.where(df["rpm"] > 1, (df["rpm"] * df["temperature"]) * 0.001, 0.0)
+    df["thermal_stress"] = np.where(df["rpm"] > 1, (df["temperature"] - _P605_THRESHOLD) * 0.01, 0.0)
+    df["motor_overload"] = np.where(df["rpm"] > 1, (df["torque"].abs() * df["current"]) * 0.0005, 0.0)
 
     w = 10
     df["rpm_mean10"]         = df["rpm"].rolling(w).mean()
@@ -266,14 +283,20 @@ def predict(reading: dict) -> dict:
         row["torque_current_ratio"] = row["torque"] / (row["current"] or 1)
         row["slip"] = abs(row.get("set_rpm", 0.0) - row["rpm"])
         for col in ["rpm_mean10","rpm_std10","current_mean10","current_std10",
-                    "vibration_mean10","vibration_std10","temperature_rate10"]:
+                    "vibration_mean10","vibration_std10","temperature_rate10",
+                    "thermal_overload","thermal_stress","motor_overload"]:
             row[col] = row.get(col.split("_")[0], 0.0)
         feat_row = row
     else:
         feat_row = engineered.iloc[-1].to_dict()
 
     model, scaler = _load_artifacts()
-    x = np.array([[feat_row.get(c, 0.0) for c in FEATURE_COLUMNS]], dtype=float)
+    
+    # Support backward compatibility for models trained before new features were added
+    n_features = getattr(scaler, "n_features_in_", len(FEATURE_COLUMNS))
+    infer_cols = FEATURE_COLUMNS[:n_features] if n_features < len(FEATURE_COLUMNS) else FEATURE_COLUMNS
+    
+    x = np.array([[feat_row.get(c, 0.0) for c in infer_cols]], dtype=float)
     x_scaled = scaler.transform(x)
     raw = model.decision_function(x_scaled)[0]
     normalized = _raw_to_normalized(raw)
@@ -298,7 +321,12 @@ def predict_batch(df: pd.DataFrame) -> pd.DataFrame:
 
     engineered = engineer_features(df)
     model, scaler = _load_artifacts()
-    X = engineered[FEATURE_COLUMNS].to_numpy(dtype=float)
+    
+    # Support backward compatibility for models trained before new features were added
+    n_features = getattr(scaler, "n_features_in_", len(FEATURE_COLUMNS))
+    infer_cols = FEATURE_COLUMNS[:n_features] if n_features < len(FEATURE_COLUMNS) else FEATURE_COLUMNS
+    
+    X = engineered[infer_cols].to_numpy(dtype=float)
     X_scaled = scaler.transform(X)
     raw = model.decision_function(X_scaled)
     normalized = np.clip(1 - ((raw + 0.3) / 0.6), 0.0, 1.0)
@@ -312,11 +340,12 @@ def predict_batch(df: pd.DataFrame) -> pd.DataFrame:
 
 FAULT_TYPES = [
     "bearing_shaft",
-    "overload",
+    "motor_overload",
     "coupling_slip",
     "voltage_supply",
     "winding_overcurrent",
     "thermal_overload",
+    "thermal_stress",
     "mechanical_imbalance",
     "slip_fault",
 ]
@@ -352,16 +381,22 @@ def diagnose_fault(reading: dict) -> dict:
     power_z      = z("mechanical_power_proxy")
     tcr_z        = z("torque_current_ratio")
     slip_z       = z("slip")
+    
+    # New calculated features
+    thermal_overload_z = z("thermal_overload")
+    thermal_stress_z   = z("thermal_stress")
+    motor_overload_z   = z("motor_overload")
 
     scores = {
-        "bearing_shaft":       0.5 * vibration_z + 0.3 * vib_std_z + 0.2 * current_z,
-        "overload":            0.4 * current_z   + 0.3 * power_z   + 0.3 * torque_z,
-        "coupling_slip":       0.5 * tcr_z       + 0.3 * torque_z  + 0.2 * vib_std_z,
-        "voltage_supply":      0.6 * voltage_z   + 0.2 * current_z + 0.2 * power_z,
-        "winding_overcurrent": 0.5 * cur_std_z   + 0.3 * current_z + 0.2 * temp_z,
-        "thermal_overload":    0.5 * temp_z      + 0.3 * temp_rate_z + 0.2 * current_z,
-        "mechanical_imbalance": 0.4 * vib_std_z  + 0.4 * vibration_z + 0.2 * power_z,
-        "slip_fault":          0.6 * slip_z      + 0.2 * tcr_z       + 0.2 * current_z,
+        "bearing_shaft":        0.5 * vibration_z + 0.3 * vib_std_z + 0.2 * current_z,
+        "motor_overload":       0.6 * motor_overload_z + 0.2 * current_z + 0.2 * torque_z,
+        "coupling_slip":        0.5 * tcr_z       + 0.3 * torque_z  + 0.2 * vib_std_z,
+        "voltage_supply":       0.6 * voltage_z   + 0.2 * current_z + 0.2 * power_z,
+        "winding_overcurrent":  0.5 * cur_std_z   + 0.3 * current_z + 0.2 * temp_z,
+        "thermal_overload":     0.6 * thermal_overload_z + 0.2 * temp_z + 0.2 * temp_rate_z,
+        "thermal_stress":       0.8 * thermal_stress_z + 0.2 * temp_z,
+        "mechanical_imbalance": 0.4 * vib_std_z   + 0.4 * vibration_z + 0.2 * power_z,
+        "slip_fault":           0.6 * slip_z      + 0.2 * tcr_z       + 0.2 * current_z,
     }
 
     # normalise to [0, 1]

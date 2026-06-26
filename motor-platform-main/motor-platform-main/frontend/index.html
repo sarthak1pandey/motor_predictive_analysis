@@ -85,14 +85,6 @@
     </header>
 
     <div class="param-grid" id="param-grid"><!-- param cards injected by app.js --></div>
-
-    <div class="panel focus-panel">
-      <div class="panel-head">
-        <div class="panel-title" id="focus-title">Vibration over time</div>
-        <span class="panel-meta">last 2 min</span>
-      </div>
-      <svg id="focus-chart" class="chart-svg" viewBox="0 0 880 220" preserveAspectRatio="none"></svg>
-    </div>
   </section>
 
   <!-- ===================== HISTORICAL ANALYTICS ===================== -->
@@ -115,31 +107,43 @@
       </div>
     </header>
 
-    <div class="compare-row">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" class="filter-icon"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-      <span class="compare-label">Compare (up to 3):</span>
-      <div class="compare-chips" id="compare-chips"><!-- injected --></div>
+    <!-- Section 1: Single parameter time-series -->
+    <div class="hist-section-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Parameter vs Time
     </div>
+    <div class="hist-selector-row" id="single-param-chips"><!-- injected --></div>
 
-    <div class="panel">
-      <div class="panel-head" id="history-header-1" style="display:none;">
-        <div class="panel-title" id="history-title-1">Parameter 1</div>
-      </div>
-      <svg id="history-chart-1" class="chart-svg" viewBox="0 0 880 200" preserveAspectRatio="none"></svg>
-    </div>
-
-    <div class="panel hidden" id="history-panel-2">
-      <div class="panel-head" id="history-header-2">
-        <div class="panel-title" id="history-title-2">Parameter 2</div>
-      </div>
-      <svg id="history-chart-2" class="chart-svg" viewBox="0 0 880 200" preserveAspectRatio="none"></svg>
-    </div>
-
-    <div class="panel hidden" id="history-panel-corr">
+    <div class="panel" id="history-panel-single">
       <div class="panel-head">
-        <div class="panel-title" id="history-title-corr">Correlation</div>
+        <div class="panel-title" id="history-title-single">Select a parameter above</div>
+        <span class="panel-meta" id="history-meta-single"></span>
       </div>
-      <svg id="history-chart-corr" class="chart-svg" viewBox="0 0 880 260" preserveAspectRatio="none"></svg>
+      <svg id="history-chart-single" class="chart-svg" viewBox="0 0 880 240" preserveAspectRatio="none" style="height:240px;"></svg>
+    </div>
+
+    <!-- Section 2: Correlation between 2 parameters -->
+    <div class="hist-section-label" style="margin-top:10px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="7" cy="17" r="2"/><circle cx="17" cy="7" r="2"/><line x1="8.5" y1="15.5" x2="15.5" y2="8.5"/></svg>
+      Correlation Analysis — select X and Y axis
+    </div>
+
+    <div class="hist-corr-selectors">
+      <div class="hist-corr-axis">
+        <span class="hist-axis-label">X Axis</span>
+        <div class="hist-selector-row" id="corr-x-chips"><!-- injected --></div>
+      </div>
+      <div class="hist-corr-axis">
+        <span class="hist-axis-label">Y Axis</span>
+        <div class="hist-selector-row" id="corr-y-chips"><!-- injected --></div>
+      </div>
+    </div>
+
+    <div class="panel" id="history-panel-corr">
+      <div class="panel-head">
+        <div class="panel-title" id="history-title-corr">Select X and Y parameters above</div>
+      </div>
+      <svg id="history-chart-corr" class="chart-svg" viewBox="0 0 880 300" preserveAspectRatio="none" style="height:300px;"></svg>
     </div>
 
     <div class="stat-grid" id="stat-grid"><!-- injected --></div>
