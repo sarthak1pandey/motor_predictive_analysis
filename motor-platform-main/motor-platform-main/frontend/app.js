@@ -17,7 +17,7 @@ const PARAM_META = {
   temperature: { label: "Temperature", unit: "°C",   color: "var(--c-temperature)",  range: [20,  80],   derived: false },
   vibration:   { label: "Vibration",   unit: "mm/s", color: "var(--c-vibration)",    range: [0,   6],    derived: false },
   power:       { label: "Power",       unit: "kW",   color: "var(--c-power)",        range: [0,   50],   derived: true  },
-  slip:        { label: "Slip",        unit: "RPM",  color: "var(--c-slip)",         range: [0,   20],   derived: true  },
+  slip:        { label: "Slip",        unit: "%",    color: "var(--c-slip)",         range: [0,   10],   derived: true  },
 };
 
 const ICONS = {
@@ -41,6 +41,8 @@ const FAULT_LABELS = {
   thermal_overload:    "Thermal Overload",
   mechanical_imbalance:"Mech. Imbalance",
   slip_fault:          "Slip Fault",
+  motor_overload:      "Motor Overload",
+  thermal_stress:      "Thermal Stress",
 };
 
 const FAULT_COLORS = {
@@ -52,6 +54,8 @@ const FAULT_COLORS = {
   thermal_overload:    "#FF8C42",
   mechanical_imbalance:"#5FD3A6",
   slip_fault:          "#A2E4B8",
+  motor_overload:      "#FF3366",
+  thermal_stress:      "#FFD166",
 };
 
 function svgIcon(key, color, size = 14) {
@@ -361,33 +365,70 @@ function renderScatterChart(svgEl, sX, sY, colorX, colorY, labelX, labelY) {
 }
 
 function renderAnomalyChart(svgEl, points) {
-  const w = 600, h = 180, padX = 10, padY = 12, padBottom = 8;
-  const chartH = h - padY - padBottom;
+  const w = 600, h = 200;
+  const padL = 38, padR = 10, padT = 12, padB = 26;
+  const chartW = w - padL - padR;
+  const chartH = h - padT - padB;
+
   const values = points.map(p => p.score);
+  const times  = points.map(p => p.time);
   if (!values.length) return;
 
-  const { line, area } = buildLinePath(values, w, h, padX, padY, [0, 1]);
-  const warnY  = padY + (1 - 0.35) * chartH;
-  const anomY  = padY + (1 - 0.60) * chartH;
-  const critY  = padY + (1 - 0.80) * chartH;
+  svgEl.setAttribute("viewBox", `0 0 ${w} ${h}`);
+
+  const px = i => padL + (i / (values.length - 1 || 1)) * chartW;
+  const py = v => padT + (1 - v) * chartH;
+
+  // build line + area path
+  const pts = values.map((v, i) => [px(i), py(v)]);
+  const linePath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L${pts.at(-1)[0].toFixed(1)},${(padT + chartH).toFixed(1)} L${pts[0][0].toFixed(1)},${(padT + chartH).toFixed(1)} Z`;
+
+  // threshold Y positions
+  const warnY = py(0.35);
+  const anomY = py(0.60);
+  const critY = py(0.80);
+
+  // Y-axis ticks
+  const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
+  const yTicksSvg = yTicks.map(v => {
+    const y = py(v);
+    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${w - padR}" y2="${y.toFixed(1)}" stroke="#1E272E" stroke-width="1"/>
+      <text x="${padL - 5}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" fill="#5C6671" font-size="8.5" font-family="IBM Plex Mono,monospace">${v.toFixed(1)}</text>`;
+  }).join("");
+
+  // X-axis time ticks (6 evenly spaced)
+  const xTickCount = 5;
+  const xTicksSvg = Array.from({ length: xTickCount + 1 }, (_, i) => {
+    const idx   = Math.round((i / xTickCount) * (points.length - 1));
+    const x     = px(idx);
+    const label = times[idx] ? new Date(times[idx]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    return `<line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${(padT + chartH).toFixed(1)}" stroke="#1E272E" stroke-width="1"/>
+      <text x="${x.toFixed(1)}" y="${(padT + chartH + 15).toFixed(1)}" text-anchor="middle" fill="#5C6671" font-size="8.5" font-family="IBM Plex Mono,monospace">${label}</text>`;
+  }).join("");
 
   svgEl.innerHTML = `
     <defs>
       <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#F2545D" stop-opacity="0.4"/>
+        <stop offset="0%" stop-color="#F2545D" stop-opacity="0.45"/>
         <stop offset="100%" stop-color="#F2545D" stop-opacity="0"/>
       </linearGradient>
     </defs>
-    <line x1="${padX}" y1="${warnY.toFixed(1)}" x2="${w-padX}" y2="${warnY.toFixed(1)}" stroke="#F2A93B" stroke-width="1" stroke-dasharray="3,3"/>
-    <line x1="${padX}" y1="${anomY.toFixed(1)}" x2="${w-padX}" y2="${anomY.toFixed(1)}" stroke="#F2545D" stroke-width="1" stroke-dasharray="3,3"/>
-    <line x1="${padX}" y1="${critY.toFixed(1)}" x2="${w-padX}" y2="${critY.toFixed(1)}" stroke="#FF3B30" stroke-width="1" stroke-dasharray="3,3"/>
-    <path d="${area}" fill="url(#ag)" stroke="none"/>
-    <path d="${line}" fill="none" stroke="#F2545D" stroke-width="2"/>
-    <text x="${w-padX-2}" y="${warnY-3}" text-anchor="end" fill="#F2A93B" font-size="8" font-family="IBM Plex Mono,monospace">warn</text>
-    <text x="${w-padX-2}" y="${anomY-3}" text-anchor="end" fill="#F2545D" font-size="8" font-family="IBM Plex Mono,monospace">anomaly</text>
-    <text x="${w-padX-2}" y="${critY-3}" text-anchor="end" fill="#FF3B30" font-size="8" font-family="IBM Plex Mono,monospace">critical</text>
+    ${yTicksSvg}
+    ${xTicksSvg}
+    <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + chartH}" stroke="#2C343C" stroke-width="1.2"/>
+    <line x1="${padL}" y1="${padT + chartH}" x2="${w - padR}" y2="${padT + chartH}" stroke="#2C343C" stroke-width="1.2"/>
+    <line x1="${padL}" y1="${warnY.toFixed(1)}" x2="${w - padR}" y2="${warnY.toFixed(1)}" stroke="#F2A93B" stroke-width="1" stroke-dasharray="4,3"/>
+    <line x1="${padL}" y1="${anomY.toFixed(1)}" x2="${w - padR}" y2="${anomY.toFixed(1)}" stroke="#F2545D" stroke-width="1" stroke-dasharray="4,3"/>
+    <line x1="${padL}" y1="${critY.toFixed(1)}" x2="${w - padR}" y2="${critY.toFixed(1)}" stroke="#FF3B30" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="${w - padR - 2}" y="${(warnY - 3).toFixed(1)}" text-anchor="end" fill="#F2A93B" font-size="7.5" font-family="IBM Plex Mono,monospace">warn 0.35</text>
+    <text x="${w - padR - 2}" y="${(anomY - 3).toFixed(1)}" text-anchor="end" fill="#F2545D" font-size="7.5" font-family="IBM Plex Mono,monospace">anomaly 0.60</text>
+    <text x="${w - padR - 2}" y="${(critY - 3).toFixed(1)}" text-anchor="end" fill="#FF3B30" font-size="7.5" font-family="IBM Plex Mono,monospace">critical 0.80</text>
+    <path d="${areaPath}" fill="url(#ag)" stroke="none"/>
+    <path d="${linePath}" fill="none" stroke="#F2545D" stroke-width="2"/>
   `;
 }
+
 
 /* ── Live Monitoring ────────────────────────────────────────────── */
 

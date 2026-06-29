@@ -7,6 +7,8 @@ Real schema: ts, rpm, current, torque, dc_voltage, temperature, vibration
 import sys
 import os
 from datetime import datetime
+import threading
+import time
 
 from flask import Flask, jsonify, request, send_from_directory, Response
 import pandas as pd
@@ -197,7 +199,7 @@ _settings = {
         "temperature": {"min": 20, "max": 80},
         "vibration":   {"min": 0, "max": 6},
         "power":       {"min": 0, "max": 50},
-        "slip":        {"min": 0, "max": 20}
+        "slip":        {"min": 0, "max": 10}
     }
 }
 
@@ -258,6 +260,41 @@ def api_db_reset():
     db.reset_database()
     ml_model.reset_training()
     return jsonify({"success": True})
+
+
+def background_maintenance_loop():
+    while True:
+        try:
+            # 1. Run DB downsampling / deletion
+            db.run_maintenance()
+            
+            # 2. Check ML model update status
+            state = ml_model.load_training_state()
+            now = datetime.now()
+            
+            if state.is_updating and state.update_started_at:
+                started = datetime.fromisoformat(state.update_started_at)
+                # 2 hours window
+                if (now - started).total_seconds() >= 2 * 3600:
+                    ml_model.swap_staging_model()
+            
+            # 3. Check if 3 months have passed since last complete train
+            elif state.completed and state.completed_at:
+                last_train = datetime.fromisoformat(state.completed_at)
+                if (now - last_train).days >= 90:
+                    # Trigger background train using last 30 days of data
+                    df = db.fetch_range(days=30)
+                    if not df.empty:
+                        ml_model.train_isolation_forest(df, is_update=True)
+                        
+        except Exception as e:
+            print(f"Background thread error: {e}")
+            
+        time.sleep(60)  # Check every minute
+
+# Start background thread
+bg_thread = threading.Thread(target=background_maintenance_loop, daemon=True)
+bg_thread.start()
 
 
 if __name__ == "__main__":

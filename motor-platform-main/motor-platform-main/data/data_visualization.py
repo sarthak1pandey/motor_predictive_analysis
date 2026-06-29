@@ -21,7 +21,7 @@ PARAM_META = {
     "temperature": {"label": "Temperature",  "unit": "°C",    "color": "#E58FB3", "derived": False},
     "vibration":   {"label": "Vibration",    "unit": "mm/s",  "color": "#F2545D", "derived": False},
     "power":       {"label": "Power",        "unit": "kW",    "color": "#FFD166", "derived": True},
-    "slip":        {"label": "Slip",         "unit": "RPM",   "color": "#A2E4B8", "derived": True},
+    "slip":        {"label": "Slip",         "unit": "%",     "color": "#A2E4B8", "derived": True},
 }
 
 RESAMPLE_TARGET_POINTS = 500

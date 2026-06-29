@@ -1,12 +1,12 @@
 {
   "motor_id": "M-014",
-  "location": "Plant Floor A",
+  "location": "Plant Floor b",
   "poll_interval_s": 2,
   "alert_email": "",
   "thresholds": {
     "rpm": {
       "min": 0.0,
-      "max": 500.0
+      "max": 270.0
     },
     "current": {
       "min": 0.0,
@@ -26,11 +26,11 @@
     },
     "vibration": {
       "min": 0.0,
-      "max": 10.0
+      "max": 6.0
     },
     "power": {
       "min": 0.0,
-      "max": 2.0
+      "max": 50.0
     },
     "slip": {
       "min": 0,

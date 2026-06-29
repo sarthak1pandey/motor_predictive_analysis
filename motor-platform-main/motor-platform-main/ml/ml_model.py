@@ -34,6 +34,8 @@ FEATURE_COLUMNS = [
     # rolling stats (window=10)
     "rpm_mean10", "rpm_std10", "current_mean10", "current_std10",
     "vibration_mean10", "vibration_std10", "temperature_rate10",
+    # state features
+    "is_steady", "is_ramp_up", "is_ramp_down",
 ]
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
@@ -41,6 +43,10 @@ MODEL_PATH = os.path.join(MODEL_DIR, "isolation_forest.joblib")
 SCALER_PATH = os.path.join(MODEL_DIR, "scaler.joblib")
 TRAINING_STATE_PATH = os.path.join(MODEL_DIR, "training_state.json")
 FEATURE_STATS_PATH = os.path.join(MODEL_DIR, "feature_stats.json")
+
+MODEL_PATH_STAGING = os.path.join(MODEL_DIR, "isolation_forest_staging.joblib")
+SCALER_PATH_STAGING = os.path.join(MODEL_DIR, "scaler_staging.joblib")
+FEATURE_STATS_PATH_STAGING = os.path.join(MODEL_DIR, "feature_stats_staging.json")
 
 THRESHOLD_WARNING  = 0.35
 THRESHOLD_ANOMALY  = 0.60
@@ -62,11 +68,13 @@ class TrainingState:
     completed: bool = False
     completed_at: Optional[str] = None
     records_collected: int = 0
+    is_updating: bool = False
+    update_started_at: Optional[str] = None
 
     def to_dict(self):
         return asdict(self)
 
-
+# CHANGE THIS TO CHANGE THE NUMBER OF HOURS
 CONFIGURED_DURATION_HOURS = 1  # <-- change training window here
 
 def load_training_state() -> TrainingState:
@@ -105,14 +113,22 @@ def training_progress(state: TrainingState, db_latest_ts=None) -> dict:
     total = timedelta(hours=state.duration_hours).total_seconds()
     pct = max(0.0, min(100.0, (elapsed / total) * 100))
 
+    status = "MACHINE_UNDER_TRAINING"
+    if state.is_updating:
+        status = "MODEL_UPDATING"
+    elif state.completed:
+        status = "MODEL_DEPLOYED"
+        
     return {
-        "status": "MODEL_DEPLOYED" if state.completed else "MACHINE_UNDER_TRAINING",
+        "status": status,
         "duration_hours": state.duration_hours,
         "started_at": state.started_at,
         "completion_date": completion_date.isoformat(),
         "progress_pct": round(pct, 2),
         "records_collected": state.records_collected,
         "ready_to_train": pct >= 100 and not state.completed,
+        "is_updating": state.is_updating,
+        "update_started_at": state.update_started_at
     }
 
 # ── Feature engineering ───────────────────────────────────────────────────────
@@ -130,7 +146,14 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df["torque_current_ratio"] = (
         df["torque"] / df["current"].replace(0, np.nan)
     ).fillna(0).round(4)
-    df["slip"] = (df["set_rpm"] - df["rpm"]).abs().round(4)
+    df["slip"] = np.where(df["set_rpm"] > 0, ((df["set_rpm"] - df["rpm"]) / df["set_rpm"] * 100), 0.0).round(2)
+    
+    # Machine state
+    rpm_tol = 15.0
+    df["is_ramp_up"] = ((df["set_rpm"] > 0) & (df["rpm"] < df["set_rpm"] - rpm_tol)).astype(float)
+    df["is_ramp_down"] = (((df["set_rpm"] == 0) & (df["rpm"] > 5)) | ((df["set_rpm"] > 0) & (df["rpm"] > df["set_rpm"] + rpm_tol))).astype(float)
+    df["is_steady"] = ((df["set_rpm"] > 0) & (df["rpm"] >= df["set_rpm"] - rpm_tol) & (df["rpm"] <= df["set_rpm"] + rpm_tol)).astype(float)
+
     # Placeholder thermal calculations (only when rpm > 1)
     df["thermal_overload"] = np.where(df["rpm"] > 1, (df["rpm"] * df["temperature"]) * 0.001, 0.0)
     df["thermal_stress"] = np.where(df["rpm"] > 1, (df["temperature"] - _P605_THRESHOLD) * 0.01, 0.0)
@@ -175,6 +198,7 @@ def train_isolation_forest(
     n_estimators: int = 200,
     contamination: float = "auto",
     random_state: int = 42,
+    is_update: bool = False
 ) -> dict:
     missing = [c for c in RAW_COLUMNS if c not in df.columns]
     if missing:
@@ -200,18 +224,26 @@ def train_isolation_forest(
     )
     model.fit(X_scaled)
 
-    joblib.dump(model, MODEL_PATH)
-    joblib.dump(scaler, SCALER_PATH)
+    m_path = MODEL_PATH_STAGING if is_update else MODEL_PATH
+    s_path = SCALER_PATH_STAGING if is_update else SCALER_PATH
+    f_path = FEATURE_STATS_PATH_STAGING if is_update else FEATURE_STATS_PATH
+
+    joblib.dump(model, m_path)
+    joblib.dump(scaler, s_path)
 
     # persist feature stats for schema validation
     stats = {col: {"mean": float(engineered[col].mean()), "std": float(engineered[col].std())}
              for col in FEATURE_COLUMNS}
-    with open(FEATURE_STATS_PATH, "w") as f:
+    with open(f_path, "w") as f:
         json.dump(stats, f, indent=2)
 
     state = load_training_state()
-    state.completed = True
-    state.completed_at = datetime.now().isoformat()
+    if is_update:
+        state.is_updating = True
+        state.update_started_at = datetime.now().isoformat()
+    else:
+        state.completed = True
+        state.completed_at = datetime.now().isoformat()
     save_training_state(state)
 
     return {
@@ -224,6 +256,24 @@ def train_isolation_forest(
 
 def model_is_trained() -> bool:
     return os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH)
+
+def swap_staging_model() -> None:
+    if os.path.exists(MODEL_PATH_STAGING):
+        os.replace(MODEL_PATH_STAGING, MODEL_PATH)
+    if os.path.exists(SCALER_PATH_STAGING):
+        os.replace(SCALER_PATH_STAGING, SCALER_PATH)
+    if os.path.exists(FEATURE_STATS_PATH_STAGING):
+        os.replace(FEATURE_STATS_PATH_STAGING, FEATURE_STATS_PATH)
+        
+    global _cached_model, _cached_scaler
+    _cached_model = None
+    _cached_scaler = None
+    
+    state = load_training_state()
+    state.is_updating = False
+    state.update_started_at = None
+    state.completed_at = datetime.now().isoformat()
+    save_training_state(state)
 
 # ── Inference ─────────────────────────────────────────────────────────────────
 
@@ -264,6 +314,18 @@ def predict(reading: dict) -> dict:
             "error": "Model not yet trained.",
         }
 
+    # Sensor validation
+    rpm_val = reading.get("rpm", 0)
+    current_val = reading.get("current", -1.0)
+    vib_val = reading.get("vibration", -1.0)
+    if rpm_val > 5 and current_val == 0.0 and vib_val == 0.0:
+        return {
+            "score": 1.0,
+            "health": "Sensor Fault",
+            "raw_decision_function": -1.0,
+            "fault_diagnosis": {"top_fault": "sensor_failure", "confidence": 1.0, "scores": {}}
+        }
+
     _live_buffer.push(reading)
     buf_df = _live_buffer.to_df()
 
@@ -281,7 +343,15 @@ def predict(reading: dict) -> dict:
         row["motor_on"] = float(row["rpm"] > 5)
         row["mechanical_power_proxy"] = abs(row["torque"]) * row["rpm"]
         row["torque_current_ratio"] = row["torque"] / (row["current"] or 1)
-        row["slip"] = abs(row.get("set_rpm", 0.0) - row["rpm"])
+        
+        set_r = row.get("set_rpm", 0.0)
+        row["slip"] = (set_r - row["rpm"]) / set_r * 100 if set_r > 0 else 0.0
+        
+        rpm_tol = 15.0
+        row["is_ramp_up"] = float(set_r > 0 and row["rpm"] < set_r - rpm_tol)
+        row["is_ramp_down"] = float((set_r == 0 and row["rpm"] > 5) or (set_r > 0 and row["rpm"] > set_r + rpm_tol))
+        row["is_steady"] = float(set_r > 0 and abs(row["rpm"] - set_r) <= rpm_tol)
+
         for col in ["rpm_mean10","rpm_std10","current_mean10","current_std10",
                     "vibration_mean10","vibration_std10","temperature_rate10",
                     "thermal_overload","thermal_stress","motor_overload"]:
@@ -381,6 +451,10 @@ def diagnose_fault(reading: dict) -> dict:
     power_z      = z("mechanical_power_proxy")
     tcr_z        = z("torque_current_ratio")
     slip_z       = z("slip")
+    
+    # Suppress slip anomalies during expected transient states
+    if float(reading.get("is_ramp_up", 0.0)) > 0 or float(reading.get("is_ramp_down", 0.0)) > 0:
+        slip_z = 0.0
     
     # New calculated features
     thermal_overload_z = z("thermal_overload")

@@ -101,7 +101,7 @@ def add_derived(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["motor_on"] = (df["rpm"] > 5).astype(int)
     df["power"] = ((df["dc_voltage"] * df["current"]) / 1000.0).round(3)
-    df["slip"] = (df["set_rpm"] - df["rpm"]).abs().round(4)
+    df["slip"] = np.where(df["set_rpm"] > 0, ((df["set_rpm"] - df["rpm"]) / df["set_rpm"] * 100), 0.0).round(2)
     return df
 
 
@@ -110,4 +110,45 @@ def reset_database() -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM plc_tags")
 
-
+def run_maintenance() -> None:
+    """Downsample data older than 7 days to 1-minute resolution, and delete data older than 90 days."""
+    try:
+        with get_conn() as conn:
+            # 1. Delete data older than 90 days
+            cutoff_90 = (datetime.now() - timedelta(days=90)).isoformat()
+            conn.execute("DELETE FROM plc_tags WHERE ts < ?", (cutoff_90,))
+            
+            # 2. Downsample data older than 7 days
+            cutoff_7 = (datetime.now() - timedelta(days=7)).isoformat()
+            
+            conn.execute("DROP TABLE IF EXISTS temp.downsampled_tags")
+            conn.execute("""
+                CREATE TEMP TABLE downsampled_tags AS
+                SELECT 
+                    strftime('%Y-%m-%dT%H:%M:00', ts) as ts,
+                    AVG(set_rpm) as set_rpm,
+                    AVG(rpm) as rpm,
+                    AVG(current) as current,
+                    AVG(torque) as torque,
+                    AVG(dc_voltage) as dc_voltage,
+                    AVG(temperature) as temperature,
+                    AVG(vibration) as vibration
+                FROM plc_tags
+                WHERE ts < ?
+                GROUP BY strftime('%Y-%m-%dT%H:%M:00', ts)
+            """, (cutoff_7,))
+            
+            # Delete old raw data
+            conn.execute("DELETE FROM plc_tags WHERE ts < ?", (cutoff_7,))
+            
+            # Insert downsampled data back
+            conn.execute("""
+                INSERT INTO plc_tags (ts, set_rpm, rpm, current, torque, dc_voltage, temperature, vibration)
+                SELECT ts, set_rpm, rpm, current, torque, dc_voltage, temperature, vibration
+                FROM temp.downsampled_tags
+            """)
+            
+            conn.execute("DROP TABLE temp.downsampled_tags")
+            
+    except Exception as e:
+        print(f"Error running database maintenance: {e}")
