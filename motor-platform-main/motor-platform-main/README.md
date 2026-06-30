@@ -8,7 +8,7 @@ motor-platform/
 ├── db.py                       SQLite data layer (replaces AWS/in-memory)
 ├── requirements.txt
 ├── ml/
-│   └── ml_model.py             Isolation Forest + 7-fault rule-based diagnosis
+│   └── ml_model.py             Isolation Forest + 9-fault rule-based diagnosis
 ├── data/
 │   └── data_visualization.py   Chart-ready JSON payloads (real schema)
 └── frontend/
@@ -78,3 +78,36 @@ db.seed_from_dataframe(df)
 Training progress is anchored to the database's own latest timestamp,
 not wall clock. If real deployment data has future-dated timestamps,
 progress still computes correctly.
+
+Motor
+Vibration 
+current
+torque
+temperature
+voltage
+set rpm
+act rpm
+machine on/off state 
+
+OEE system level data come from plc 
+fault time --> fault bit
+run time --> run bit
+stop time --> stop bit
+will be add on the app as a saparate page for OEE
+# Over any time window [t_start, t_end]:
+
+planned_time   = shift_seconds_in_window          # from settings.json
+
+actual_run     = COUNT(rows WHERE run_bit=1 AND fault_bit=0) × poll_interval
+fault_time     = COUNT(rows WHERE fault_bit=1)    × poll_interval
+total_run_time = COUNT(rows WHERE run_bit=1)      × poll_interval
+
+availability   = actual_run / planned_time
+
+performance    = AVG(rpm / set_rpm)               # filtered: run_bit=1, fault_bit=0, set_rpm > 0
+
+quality        = actual_run / total_run_time      # proxy; or 1.0 if no defect signal
+
+OEE            = availability × performance × quality
+
+
